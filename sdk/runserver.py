@@ -69,6 +69,17 @@ class TsnRunServer:
         self.pointList = None
         self.isFaceStatus = 1
         self.faceUploaded = False
+
+    # 老代码里统一写 self.client，实际只在 tsnClient 上赋值；
+    # 用属性兜住两种写法，避免又出现 AttributeError。
+    @property
+    def client(self):
+        return self.tsnClient
+
+    @client.setter
+    def client(self, value):
+        self.tsnClient = value
+
     @classmethod
     def publicRunTypeConvert(cls, runType: TsnRunType):
         if runType == TsnRunType.morningRun:

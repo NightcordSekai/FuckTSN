@@ -1,4 +1,5 @@
 """HTTP 层的离线单测：协议级重试、query/body 位置、异常归类。"""
+import io
 import json
 import unittest
 from unittest import mock
@@ -91,6 +92,55 @@ class OAuthTransport(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured['body'], b'')
         self.assertTrue(captured['auth'].startswith('Basic '))
 
+
+
+class MultipartContentType(unittest.IsolatedAsyncioTestCase):
+    """multipart 上传不能被客户端默认的 form-urlencoded Content-Type 顶掉。
+
+    真实事故：exerciseRunningFace 的 body 里混着 JPEG 字节，服务端拿到
+    `Content-Type: application/x-www-form-urlencoded` 后把整段 body 当表单用
+    URLDecoder 解析，遇到图片里的 0x25 直接 500：
+    `Illegal hex characters in escape (%) pattern`。
+    """
+
+    def _core(self, handler):
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        return http.TsnHttpCore(
+            base_url='http://a.example.com',
+            client=client,
+            headers={'Content-Type': 'application/x-www-form-urlencoded', 'token': 't'},
+        )
+
+    async def test_files_switches_to_multipart_boundary(self):
+        seen = {}
+
+        def handler(request):
+            seen['content-type'] = request.headers.get('content-type', '')
+            seen['body'] = request.content
+            return _json({'code': 0, 'data': True})
+
+        image = b'\xff\xd8\xff\xdb%SD)\x00'
+        result = await self._core(handler).send(
+            'POST',
+            'exercise/exerciseRunningFace/1/face',
+            data={'key': 'k', 'param': 'p'},
+            files={'file': ('file.jpg', io.BytesIO(image), 'image/jpeg')},
+        )
+
+        self.assertIs(result.kind, ResultKind.OK)
+        self.assertTrue(seen['content-type'].startswith('multipart/form-data; boundary='))
+        self.assertIn(b'name="file"', seen['body'])
+        self.assertIn(b'%SD)', seen['body'])
+
+    async def test_plain_form_keeps_default_content_type(self):
+        seen = {}
+
+        def handler(request):
+            seen['content-type'] = request.headers.get('content-type', '')
+            return _json({'code': 0, 'data': True})
+
+        await self._core(handler).send('POST', 'exercise/x', data={'a': '1'})
+        self.assertEqual(seen['content-type'], 'application/x-www-form-urlencoded')
 
 async def _noop():
     return None

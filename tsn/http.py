@@ -77,6 +77,11 @@ class TsnHttpCore:
         method = method.upper()
         full_url = self.build_url(url)
         merged = {**self.headers, **(headers or {})}
+        if files:
+            # multipart 请求必须让 httpx 自己写 Content-Type: multipart/form-data; boundary=...
+            # 客户端默认头里的 application/x-www-form-urlencoded 会把整段 body 当表单解析，
+            # 文件字节被 URLDecoder 处理 → 500 Illegal hex characters in escape (%) pattern。
+            merged = {k: v for k, v in merged.items() if k.lower() != 'content-type'}
         if timeout is None:
             timeout = DEFAULT_TIMEOUT
         if allow_protocol_retry is None:

@@ -135,7 +135,9 @@ class TiShiNengSdkPublic:
         sorted_params = {key: params[key] for key in sorted(params.keys())}
         encData = randomAesUtils.encrypt(json.dumps(sorted_params, separators=(',', ':')))
         key = self.rsaUtils.encrypt_bytes(aesKey.encode())
-        return {'key': key, 'param': encData}
+        # 与 buildEncParams(is_encoded=True) 一致：表单字段必须 percent-encode，
+        # 否则未编码的 base64（含 + / =）会被宝塔 WAF 以 403 拦下。
+        return {'key': urllib.parse.quote(key, safe=''), 'param': urllib.parse.quote(encData, safe='')}
 
     # ---- 状态 -------------------------------------------------------
     def _rebuild_aes(self, token: str) -> None:
@@ -157,10 +159,13 @@ class TiShiNengSdkPublic:
         self.core.set_base_url(self.cloudUrl)
         if self.cloudUrl.startswith('http://'):
             logger.warning('网关使用明文 http：{}（该学校未提供 https，凭据在链路上可见）', self.cloudUrl)
-        if 'edu.cn' in cloudUrl:
-            parsed = urllib.parse.urlparse(normalized)
-            if parsed.netloc:
-                self.headers['Host'] = parsed.netloc
+        # 网关默认把 Host 钉在 m.boxkj.com；一旦切到学校自建 lan_url，
+        # Host 必须跟着换成目标 netloc，否则学校 nginx 按 Host 分流会直接 404。
+        parsed = urllib.parse.urlparse(normalized)
+        if parsed.netloc:
+            self.headers['Host'] = parsed.netloc
+            if getattr(self.core, 'headers', None) is not None:
+                self.core.headers['Host'] = parsed.netloc
 
     def setToken(self, token):
         self.token = token

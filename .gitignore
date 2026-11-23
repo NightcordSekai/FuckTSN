@@ -42,3 +42,11 @@ tsn_login.py
 DEPLOY_REPORT.md
 prs/
 nul
+
+# ---- 一次性排查脚本（本地探针，绝不入库）----
+_probe*.py
+_check*.py
+_login_once.py
+_spy_*.py
+_mk_reference.py
+CON

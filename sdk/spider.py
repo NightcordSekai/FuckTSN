@@ -75,9 +75,11 @@ async def processRawAndAddDateBase(schoolCode, rawData, isPublic=True):
     await AddDateBase(runPathId, runLineList, sportRange, pointIdList, okPointListJson, schoolCode, isPublic=isPublic)
 
 async def startSpider(accountId: int) -> None:
-    tsnClient: TiShiNengPrivate | TiShiNengSdkPublic | None = None
+    client: TiShiNengPrivate | TiShiNengSdkPublic | None = None
     async for newDb in get_db():
-        tsnClient = await getTsnClientById(accountId, newDb)
+        client = await getTsnClientById(accountId, newDb)
+    if client is None:
+        raise RuntimeError(f'账号 {accountId} 无可用客户端')
     if client.isPublic():
         baseRecord = await client.listExerciseRecord(1, '', 1)
         dates = baseRecord['dates']

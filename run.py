@@ -66,7 +66,7 @@ RUN_TYPE = {"morning": TsnRunType.morningRun, "sun": TsnRunType.sumRun, "freedom
 
 
 def base_client() -> TiShiNengPrivate:
-    return TiShiNengPrivate(1, 1, "", False, str(uuid.uuid4()), "Xiaomi", "25042PN24C", "25053RT47C", "")
+    return TiShiNengPrivate(1, 1, "", False, str(uuid.uuid4()), "Xiaomi", "25042PN24C", "")
 
 
 # ---------------------------------------------------------------- 学校
