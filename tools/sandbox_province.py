@@ -56,7 +56,7 @@ from app.models import TsnSchool_Model                       # noqa: E402
 from tools.tsn_sandbox import Sandbox, make_face_jpeg        # noqa: E402
 
 SANDBOX_USER = 'sandbox-user'
-SANDBOX_PASS = 'sandbox-pass'
+SANDBOX_PASS = 'sandbox-pass'      # 沙盘不校验密码，只要非空
 REFERENCE_DIR = 'references'
 
 

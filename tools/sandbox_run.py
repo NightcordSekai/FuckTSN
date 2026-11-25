@@ -41,7 +41,7 @@ from sdk.public import TiShiNengSdkPublic                   # noqa: E402
 from tools.tsn_sandbox import Sandbox, make_face_jpeg       # noqa: E402
 
 SANDBOX_USER = 'sandbox-user'
-SANDBOX_PASS = 'sandbox-pass'
+SANDBOX_PASS = 'sandbox-pass'      # 沙盘不校验密码，只要非空
 
 
 def build_sandbox() -> Sandbox:
