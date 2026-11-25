@@ -40,16 +40,22 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Windows 控制台默认 GBK，🚫/⚠️ 之类符号会直接把脚本打崩
-if hasattr(sys.stdout, 'buffer') and not getattr(sys.stdout, '_utf8_wrapped', False):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
-    sys.stdout._utf8_wrapped = sys.stderr._utf8_wrapped = True
+# Windows 控制台默认 GBK，🚫/⚠️ 之类符号会直接把脚本打崩。
+# 注意：这里只能用 `reconfigure()`，不能 `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, ...)`
+# —— 后者会接管底层 buffer 的所有权，wrapper 一旦被回收就会把捕获流（pytest、重定向）关掉，
+# 表现为 `ValueError: I/O operation on closed file`。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, 'reconfigure'):
+        try:
+            _stream.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
+        except (ValueError, OSError):  # 已关闭或不可重配的流（如测试捕获）直接跳过
+            pass
 
 from tsn import compliance
 from app import config
 from app.device import deviceModel
 from sdk.runpath import genTiShiNengRunPathRepeat
+from track.determinism import seeded, seed_from_rng
 from tsn import submit as tsn_submit
 from sdk.public import TiShiNengSdkPublic
 
@@ -83,14 +89,33 @@ async def _sleep(seconds: float) -> None:
 # ---------------------------------------------------------------- 配置 / 参考线路
 
 def _cfg_center() -> tuple[float, float]:
-    """(lat, lon)：config.json 里可选的 latitude/longitude，否则用占位中心。"""
+    """(lat, lon)：config 的 latitude/longitude → reference.json 的线路质心 → 占位中心。
+
+    第二档是关键：`reference.json` 里就是校区真实线路，质心天然落在校区上。
+    早期实现直接落到 `DEFAULT_FENCE_CENTER`，那是个 (30, 120) 的纯占位点，
+    和参考线路差 959 km，围栏检查（修好 `_ring_points` 之后）会 100% 判围栏外。
+    """
     cfg = config.load()
     try:
-        lat = float(cfg.get('latitude'))
-        lon = float(cfg.get('longitude'))
-        return lat, lon
+        return float(cfg.get('latitude')), float(cfg.get('longitude'))
     except (TypeError, ValueError):
-        return DEFAULT_FENCE_CENTER
+        pass
+
+    center = _reference_center()
+    if center:
+        return center
+    return DEFAULT_FENCE_CENTER
+
+
+def _reference_center() -> tuple[float, float] | None:
+    """reference.json 线路的质心；读不到就返回 None。"""
+    points, _rec = load_reference()
+    if not points:
+        return None
+    # _parse_points 已经统一成 [[lon, lat], ...]
+    lons = [p[0] for p in points]
+    lats = [p[1] for p in points]
+    return sum(lats) / len(lats), sum(lons) / len(lons)
 
 
 def _json_maybe(value):
@@ -430,6 +455,21 @@ def _max_stride() -> float:
 
 
 def build_run(day: datetime.date, ref, setting, rng) -> dict:
+    """生成一条待提交记录（点串 + 步数桶 + meta）。
+
+    外面套一层 :func:`track.determinism.seeded`，是因为 `sdk/runpath.py`
+    里有几处随机**不接外部 rng**（模块级 `random.randint` / 无名
+    `random.Random()`）。不接管它们的话 `--seed` 只是摆设：同一 seed
+    连跑两次，里程与点串都不相同（实测 2.3524 vs 2.3299）。
+
+    种子从调用方 rng **当前状态**派生，所以既不用改任何调用方签名，
+    又保留了「rng 前进 → 下一条记录不同」的原意。
+    """
+    with seeded(seed_from_rng(rng)):
+        return _build_run(day, ref, setting, rng)
+
+
+def _build_run(day: datetime.date, ref, setting, rng) -> dict:
     local_start = datetime.datetime.combine(
         day, datetime.time(hour=rng.randint(6, 8), minute=rng.randint(0, 55),
                            second=rng.randint(5, 55)))
@@ -891,6 +931,7 @@ async def main() -> None:
     for day in days:
         age = (today - day).days
         flag = '老' if age > args.warn_age else '新'
+        # `build_run` 内部已接管 sdk/runpath.py 的未播种随机源，这里不用再套。
         run = build_run(day, ref, setting, rng)
         report = compliance.check_submission(run['points'], run['segs'], run['meta'],
                                              fence=fence, history=[])

@@ -30,10 +30,14 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if hasattr(sys.stdout, 'buffer') and not getattr(sys.stdout, '_utf8_wrapped', False):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
-    sys.stdout._utf8_wrapped = sys.stderr._utf8_wrapped = True
+# 只用 reconfigure()：`sys.stdout = io.TextIOWrapper(sys.stdout.buffer, ...)` 会接管底层
+# buffer，wrapper 被回收时关闭捕获流（pytest 下报 `ValueError: I/O operation on closed file`）。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, 'reconfigure'):
+        try:
+            _stream.reconfigure(encoding='utf-8', errors='replace', line_buffering=True)
+        except (ValueError, OSError):
+            pass
 
 from app import backfill  # noqa: E402
 from app import config  # noqa: E402
@@ -45,9 +49,13 @@ def _rows(pages) -> list[dict]:
     """服务端对 datePageIndex 不敏感（每页都回同一批），必须按 id 去重。"""
     out, seen = [], set()
     for page in pages or []:
-        if not isinstance(page, dict):
+        if isinstance(page, list):          # 扁平数组形态（listExerciseRecord 实测）
+            rows = page
+        elif isinstance(page, dict):
+            rows = page.get('records') or page.get('list') or []
+        else:
             continue
-        for row in (page.get('records') or page.get('list') or []):
+        for row in rows:
             if not isinstance(row, dict):
                 continue
             key = row.get('id') or (row.get('startTime'), row.get('sportRange'))

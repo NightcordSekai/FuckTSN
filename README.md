@@ -1,8 +1,8 @@
 # TSN 校园跑：协议复现 · 合格判定规格 · 轨迹合成 · 批量编排
 
-> 对一个高校「校园阳光跑」App（`com.bxkj.student`）的通信协议做完整复现，并在协议之上做四层工程：
+> 对一个高校「校园阳光跑」App（`com.bxkj.student`）的通信协议做完整复现，并在协议之上做五层工程：
 > ① 可执行的「成绩合格」判定层；② 生理自洽的轨迹合成层；③ 跨客户端版本的字段兼容层；
-> ④ 失败即停、可断点续跑的批量编排层。
+> ④ 失败即停、可断点续跑的批量编排层；⑤ **不用账号、不联网也能验证全部判定的离线沙盘**。
 >
 > 所有实现来自**报文观察 + 服务端真实记录**两源合证，不含任何第三方代码。
 > 仓库内**不含真实账号、学号、姓名、人脸与坐标**：抓回来的样本已由 `tools/sanitize.py`
@@ -12,6 +12,13 @@
 - 判定层：`tsn/compliance.py` 四档门禁（协议 / 硬闸门 / 经验区间 / 自设），14 条真实记录回放 0 误杀
 - 生成层：步幅-步频-配速自洽曲线 + GPS 噪声 + 三种跑道原型 + 60 s 步数分桶
 - 兼容层：`tsn/fields.py` 字段对照表 + `migrate_legacy()` 一键归一 + `audit_submission()` 体检
+- 沙盘层：`tools/tsn_sandbox.py` 内存服务端，**不用账号、不联网**就能把
+  「登录 → 人脸 → 提交 → 回读 → 盘点」整条链跑通（8 条硬闸门逐条有反证，2 条帮助中心
+  「上限」因与真实合格记录矛盾而降级为诊断量，见 [`docs/沙盘复现.md`](docs/沙盘复现.md) §3.2）；
+  `tools/sandbox_province.py` 再把它扩到**多校批量**（`--province 广东省` 一次 106 所，
+  一所一个独立沙盘，各自去重表/人脸记录/收包计数、各自可复现的轨迹种子）
+- 情报层：[`docs/服务端情报.md`](docs/服务端情报.md) —— 四个域名的真实身份、被 WAF 挡住的东西、
+  匿名可读的接口清单、官方帮助中心 48 条判定规则原文，以及与沙盘 `Judge` 的逐条对账
 
 ---
 
@@ -34,9 +41,19 @@
 
 1. **步幅、步频、`limitStride`、`limitStepFrequency` 服务端并没有执行** —— 合格记录里步幅从
    0.95 m 到 3.79 m、步频从 47 spm 到 129 spm，全部照收。把步幅窗口当成硬闸门只会误杀。
-2. **点串不参与距离判定** —— 服务端只信 `sportRange` / `gpsDistance`；合格记录的点串累加比上报
-   长 +0.53%~+37.1% 都合格。但点串**短于**上报会挨罚，且 9 个键必须齐、值必须是字符串。
+2. **点串不参与距离判定** —— 服务端只信 `sportRange` / `gpsDistance`；真实合格记录按
+   `∫|s|·dt` 算只比上报多 +0.53%~+37.1%，但按点串 haversine 累加却是上报的 **3.7–5.7 倍**
+   （`docs/合格规格.md` 附录 A 的「链长/上报」列用的是前者）。两条口径都不是判据，
+   服务器不重算点位；但点串**短于**上报会挨罚，且 9 个键必须齐、值必须是字符串。
 3. **`startQualifiedTimeSetting=6` 是"6 分钟"，不是"6 点"** —— 实测 21:10 开跑照样合格。
+
+另外两条来自官方帮助中心（`/upms/sysHelpCenter/sysHelpCenterList`，匿名可读）的「上限」，
+**实测和真实合格记录矛盾**，沙盘里只做诊断不做拦截：
+
+- 「轨迹距离大于步数的两倍则提示异常」→ 5 条真实合格记录的点串/步数 = 3.8 / 9.4 / 10.8 / 3.8 / 7.4，全部超 2×
+- 「某一时间段步幅 > 2.5 米/步」→ 同样 5 条记录 60 s 段最差 7.5 / 86.6 / 396.3 / 5.8 / 60.2 m/步，全部超 2.5
+
+详见 [`docs/沙盘复现.md`](docs/沙盘复现.md) §3.2 与 [`docs/服务端情报.md`](docs/服务端情报.md) §5.1。
 
 判断某条到底算不算数，只看一个字段：`reachRange == sportRange` 时计入成绩，`0.000` 就是没算。
 
@@ -54,6 +71,12 @@ echo 密码>> account.txt
 
 # ① 离线自检：造数据 + 过门禁，不联网
 python run.py selftest --count 3
+
+# ①' 离线沙盘：不用账号、不联网，把「登录 → 人脸 → 提交 → 回读 → 盘点」整条链跑通
+python run.py sandbox --count 5 --reject-demo      # 判定反证 + 5 条真实合格记录回放
+python run.py sandbox --province 广东省            # 全省 106 所，一所一个独立沙盘
+python run.py sandbox --codes gzccc,sgu,scnu      # 指定几所
+#    去掉 config.json / account.txt 也能跑：它把 make_client() 整体换掉，不读账号、不发一个真实请求
 
 # ② 接学校与账号（示例＝北京大学：school_id 100 / schoolCode pku / sysType 2）
 python run.py school-info --code pku
@@ -153,9 +176,11 @@ python run.py backfill --plan plan.json --submit --max 3 --per-day 3 --window 6-
 │   ├── backfill.py         ★  批量编排执行器（台账 / 限速 / 盯守）
 │   └── progress.py             学期盘点（只读）
 │
-├── docs/                       合格规格 / 字段对照 / 判定链路 / 接口报文 / 逆向笔记 / 重构说明
-├── tools/                      sanitize.py、audit_gates.py、render_field_doc.py、snapshot_legacy.py
-└── tests/                      协议、路由契约、门禁、字段、几何等价性
+├── docs/                       合格规格 / 字段对照 / 判定链路 / 接口报文 / 逆向笔记 / 重构说明 / 沙盘复现
+├── tools/                      sanitize.py、audit_gates.py、render_field_doc.py、snapshot_legacy.py、
+│                               tsn_sandbox.py（内存服务端）、sandbox_run.py（单校入口）、
+│                               sandbox_province.py（多校批量，按省份/学校码）
+└── tests/                      协议、路由契约、门禁、字段、几何等价性、沙盘
 ```
 
 ---
@@ -188,9 +213,13 @@ python run.py backfill --plan plan.json --submit --max 3 --per-day 3 --window 6-
 | `heuristic` | 从合格记录归纳的区间（步幅、步频、抖动、链长上限…），超出只提醒 | 仅 `strict` |
 | `self` | 自设的保守要求（设备画像一致性） | 仅 `strict` |
 
+**链长（`chain_delta_ratio`）只挂在 `heuristic` 档是对的**：真实合格记录按 haversine 复算
+是上报里程的 3.7–5.7 倍（`docs/合格规格.md` 附录 A 的「链长/上报」列用的是 `∫|s|·dt`，
+不是 haversine）。把它抬成 `server` 档会 100% 误杀真实合格记录。
+
 ```bash
-python -c "from tsn import compliance"                       # 默认 balanced
-python tools/audit_gates.py                         # 14 条真实记录回放，0 误杀
+python -c "from tsn import compliance"             # 默认 balanced
+python tools/audit_gates.py                        # 14 条真实记录回放，0 误杀
 ```
 
 `check_submission(points, step_numbers, meta, fence, mode='balanced')` 返回
@@ -299,11 +328,14 @@ python tools/sanitize.py           # 就地脱敏（幂等，重复跑不会二�
 ## 十、测试与工具
 
 ```bash
-python -m pytest tests -q          # 81 个用例（拆分目录后同样 81 个）
+python -m pytest tests -q          # 113 个用例（含 30 条沙盘用例：判定反证 / 真实记录回放 / 协议契约 / 多校）
 python tools/audit_gates.py        # 14 条真实记录回放（5 条合格 0 误杀 + 被拒记录命中对应闸门）
 python tools/render_field_doc.py   # 重新生成 docs/字段对照.md
 python tools/sanitize.py --check   # 脱敏残留检查
 python run.py selftest --count 5   # 生成器 + 门禁端到端
+python run.py sandbox --count 5    # 内存服务端：登录→人脸→提交→回读→盘点，全程离线
+python run.py sandbox --count 5 --reject-demo   # 额外跑判定反证 + 5 条真实合格记录回放
+python run.py sandbox --province 广东省   # 全省 106 所逐校跑，产出 logs/sandbox_province.json
 python run.py verify-plan         # 独立复核 plan.json
 ```
 
@@ -346,11 +378,17 @@ python run.py verify-plan         # 独立复核 plan.json
    完成验证」「达标步数」等），是反推判定规则的金矿。
 4. **动态**：Frida 一挂就自杀（易盾），`/proc/pid/mem` 读也自杀 → 放弃运行期 dump，
    改用「静态字符串 + 服务端记录」两源合证。
-5. **验证**：用 `getExerciseRecord` 取回的历史记录反推每一条阈值，再用 `tools/audit_gates.py`
-   回放验证 —— 规格文档里每条阈值都能指到具体记录。
+5. **前端**：H5 主包（`/static/js/index.*.js`）与各校管理后台（`<code>.tsnkj.com/js/login.js`）
+   是**未加固**的，直接可读；`login.js` 只是 obfuscator.io 混淆，用「括号配对提字符串表 →
+   `vm` 里跑 IIFE 拿旋转表 → 回填 `dec(0xNNN,'key')` → 折叠字符串拼接」四步就能还原，
+   顺手能挖出 RSA 前缀、MFA 状态机、验证码前置等客户端侧契约。
+6. **验证**：用 `getExerciseRecord` 取回的历史记录反推每一条阈值，再用 `tools/audit_gates.py`
+   回放验证 —— 规格文档里每条阈值都能指到具体记录。**新加的闸门必须能通过 5 条真实合格记录的回放**
+   （`--reject-demo` 里的「真实『合格』记录回放」段），否则就是加错了。
 
 详见 [`docs/逆向笔记.md`](docs/逆向笔记.md)、[`docs/判定链路.md`](docs/判定链路.md)、
-[`docs/重构说明.md`](docs/重构说明.md)。
+[`docs/重构说明.md`](docs/重构说明.md)、[`docs/沙盘复现.md`](docs/沙盘复现.md)、
+[`docs/服务端情报.md`](docs/服务端情报.md)。
 
 ---
 
@@ -360,3 +398,8 @@ python run.py verify-plan         # 独立复核 plan.json
 互操作与安全研究。仓库内不含任何真实账号、学号、姓名、人脸与坐标；脱敏规则与校验脚本见
 第八节。运行所需的个人信息全部放在 `config.json` / `account.txt`（已 gitignore），
 请只对你自己的账号使用。
+
+[`docs/服务端情报.md`](docs/服务端情报.md) 只登记**匿名、只读**观察到的事实（域名形态、被 WAF
+挡住的路径、可未授权读取的接口、官方规则原文），不含任何凭据、cookie、token 或可利用的写入通道；
+其中唯一一处真实 IP 已脱敏。该文档的目的是说明「哪些判定规则是官方写明的」，不是提供攻击面。
+尝试对真实服务器做未授权写入不在本仓库范围内。

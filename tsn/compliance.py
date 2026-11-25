@@ -659,6 +659,11 @@ def _ring_points(fence: Any) -> List[Dict[str, Any]]:
             return out
         return []
     if isinstance(fence, list):
+        # 已经是 [{'lng':..,'lat':..}, ...] 的单环：直接就是顶点表。
+        # 早期实现漏了这一支，导致 backfill 下发的围栏（正是这种形态）
+        # 被解析成 0 个顶点，_check_fence 一进门就 len(ring) < 3 返回。
+        if fence and all(isinstance(v, dict) and 'lat' in v and 'lng' in v for v in fence):
+            return [v for v in fence if _as_float(v.get('lat')) is not None]
         out = []
         for entry in fence:
             out.extend(_ring_points(entry))

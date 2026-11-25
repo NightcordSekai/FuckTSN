@@ -118,11 +118,19 @@ def test_sample_interval_break_is_rejected():
 
 
 def test_millisecond_jitter_is_tolerated():
-    """真实合格记录 1125/4984 个点不在整秒上（±2 ms 抖动），不能因此拒。"""
+    """真实合格记录 1125/4984 个点不在整秒上（±2 ms 抖动），不能因此拒。
+
+    这条用例以前是随机的：`genTiShiNengRunPathRepeat` 自己就会给 `t` 加 ±2 ms
+    抖动，再对每 7 个点无脑 -1，碰上"原本就已经 -2 ms"的点就会造出真正的倒退，
+    于是 20 次里失败 5 次。这里改成按固定模式重铺时间轴：相邻点严格差 1 s，
+    抖动只取 ±2 ms 内的固定序列，既确定又仍然覆盖规则边界。
+    """
     points, segments, meta = build_payload()
     bad = [dict(p) for p in points]
-    for point in bad[::7]:
-        point["t"] = str(int(point["t"]) - 1)
+    anchor = int(bad[0]["t"]) // 1000 * 1000
+    pattern = (0, -1, 2, -2, 1)
+    for index, point in enumerate(bad):
+        point["t"] = str(anchor + index * 1000 + pattern[index % len(pattern)])
     report = compliance.check_submission(bad, segments, meta, history=[])
     codes = {i.code for i in report.issues}
     assert 'dt_median' not in codes and 't_not_increasing' not in codes

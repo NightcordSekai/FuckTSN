@@ -21,6 +21,7 @@
   python run.py backfill --plan plan.json --submit --max 3 --per-day 3 --window 6-9
   python run.py progress
   python run.py verify-plan
+  python run.py sandbox --count 3 --reject-demo   # 本地沙盘：无需账号密码，不联网
 
 学校标识怎么查：`school-info --code pku` 拿校园云地址（不需要本地库）；
 `list-schools --keyword 北京大学` 查本地库里的 school_id —— 但它要有库，首次请先跑
@@ -38,9 +39,14 @@ import sys
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-if hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
+# 只用 reconfigure()：`sys.stdout = io.TextIOWrapper(sys.stdout.buffer, ...)` 会接管底层
+# buffer，wrapper 被回收时关闭捕获流（pytest 下报 `ValueError: I/O operation on closed file`）。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+        except (ValueError, OSError):
+            pass
 
 import httpx
 from loguru import logger
@@ -396,6 +402,48 @@ async def cmd_progress(args):
     return subprocess.call(cmd, cwd=os.path.dirname(os.path.abspath(__file__)))
 
 
+async def cmd_sandbox(args):
+    """本地沙盘端到端跑批：不需要账号密码，全部流量走内存服务端（见 tools/tsn_sandbox.py）。"""
+    import subprocess
+    # --province / --codes 走多校批量入口（见 tools/sandbox_province.py）
+    if getattr(args, "province", "") or getattr(args, "codes", ""):
+        cmd = [sys.executable, _script("tools/sandbox_province.py")]
+        if args.province:
+            cmd += ["--province", args.province]
+        if args.codes:
+            cmd += ["--codes", args.codes]
+        if args.limit:
+            cmd += ["--limit", str(args.limit)]
+        if args.count:
+            cmd += ["--count", str(args.count)]
+        if args.seed is not None:
+            cmd += ["--seed", str(args.seed)]
+        if args.no_face:
+            cmd += ["--no-face"]
+        if args.dry_run:
+            cmd += ["--dry-run"]
+        print("$ " + " ".join(cmd[1:]))
+        return subprocess.call(cmd, cwd=os.path.dirname(os.path.abspath(__file__)))
+
+    cmd = [sys.executable, _script("tools/sandbox_run.py")]
+    if args.count:
+        cmd += ["--count", str(args.count)]
+    if args.dates:
+        cmd += ["--dates", args.dates]
+    if args.start:
+        cmd += ["--start", args.start]
+    if args.end:
+        cmd += ["--end", args.end]
+    if args.seed is not None:
+        cmd += ["--seed", str(args.seed)]
+    if args.no_face:
+        cmd += ["--no-face"]
+    if args.reject_demo:
+        cmd += ["--reject-demo"]
+    print("$ " + " ".join(cmd[1:]))
+    return subprocess.call(cmd, cwd=os.path.dirname(os.path.abspath(__file__)))
+
+
 async def cmd_verify_plan(args):
     import subprocess
     cmd = [sys.executable, _script("track/verify_plan.py")]
@@ -446,6 +494,17 @@ def build_parser():
     q.add_argument("--watch", action="store_true"); q.set_defaults(fn=cmd_backfill)
     q = sub.add_parser("progress", help="阳光跑进度盘点（只读）")
     q.add_argument("--json", action="store_true"); q.set_defaults(fn=cmd_progress)
+    q = sub.add_parser("sandbox", help="本地沙盘端到端跑批（无需账号密码，不碰真实服务器）")
+    q.add_argument("--count", type=int, default=3); q.add_argument("--dates", default="")
+    q.add_argument("--start", default=""); q.add_argument("--end", default="")
+    q.add_argument("--seed", type=int, default=20261125)
+    q.add_argument("--no-face", action="store_true")
+    q.add_argument("--reject-demo", action="store_true", help="额外跑判定反证用例")
+    q.add_argument("--province", default="", help="按省份批量，如 广东省（106 所）")
+    q.add_argument("--codes", default="", help="逗号分隔的 school_code，如 gzccc,sgu,scnu")
+    q.add_argument("--limit", type=int, default=0, help="批量时只跑前 N 所")
+    q.add_argument("--dry-run", action="store_true", help="批量时只跑本地门禁，不提交")
+    q.set_defaults(fn=cmd_sandbox)
     q = sub.add_parser("verify-plan", help="独立复核 plan.json")
     q.add_argument("--plan", default=""); q.set_defaults(fn=cmd_verify_plan)
     return p

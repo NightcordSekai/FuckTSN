@@ -191,11 +191,19 @@ def per_run_range_meters(setting: Mapping[str, Any]) -> float:
 
 
 def required_steps(setting: Mapping[str, Any], distance_m: float) -> int:
-    """应跑步数：基准是 stepSetting；开了步数递推时按超出倍数线性放大。"""
+    """应跑步数：基准是 stepSetting；开了步数递推时按超出倍数线性放大。
+
+    递推的「一圈」是 ``totalRange``（阶段累计目标），**不是**单次门槛 ``rangeSetting``。
+
+    取证（5 条服务器判「合格」的真实记录，tests/fixtures/records_qualified.json）：
+    sportRange=4.010、step=1059 的那条 `remark` 就是「合格」——如果按 rangeSetting
+    （2 km）做分母递推，它会要求 2005 步，直接判「步数不足」；按 totalRange
+    （14.2 km）做分母则 4.01 km 仍未超一圈，要求恒为 1000 步，与实测全对上。
+    """
     base = _as_int(setting.get('step'), 0) or _as_int(setting.get('stepSetting'), 0)
-    total = per_run_range_meters(setting)
-    if _truthy(setting.get('isStepRecursion')) and total > 0 and distance_m > total:
-        return int(math.ceil(base * (distance_m / total)))
+    lap = total_range_meters(setting) or per_run_range_meters(setting)
+    if _truthy(setting.get('isStepRecursion')) and lap > 0 and distance_m > lap:
+        return int(math.ceil(base * (distance_m / lap)))
     return base
 
 
